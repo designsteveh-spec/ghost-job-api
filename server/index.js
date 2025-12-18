@@ -3,12 +3,7 @@ import cors from 'cors';
 import fetch from 'node-fetch';
 
 const app = express();
-
-/* ---------------- CONFIG ---------------- */
-
 const PORT = process.env.PORT || 3000;
-
-/* ---------------- MIDDLEWARE ---------------- */
 
 app.use(cors());
 app.use(express.json());
@@ -18,6 +13,17 @@ app.use(express.json());
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
+
+/* ---------------- HELPERS ---------------- */
+
+function stableHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
 
 /* ---------------- ANALYZE ---------------- */
 
@@ -37,96 +43,97 @@ app.post('/api/analyze', async (req, res) => {
     });
 
     const status = response.status;
-    const lastModified = response.headers.get('last-modified');
+    const html = await response.text();
+    const hostname = new URL(url).hostname;
 
-    let daysOld = null;
+    /* ---------- BASE SCORE ---------- */
 
-    if (lastModified) {
-      const parsed = new Date(lastModified);
-      if (!isNaN(parsed.getTime())) {
-        daysOld = Math.floor(
-          (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24)
-        );
-      }
+    let score = 20;
+
+    /* ---------- HTTP STATUS ---------- */
+
+    if (status === 200) score += 15;
+    else score -= 15;
+
+    /* ---------- TEXT LENGTH ---------- */
+
+    const text = html.replace(/<[^>]*>/g, ' ');
+    const words = text.split(/\s+/).filter(Boolean).length;
+
+    if (words < 300) score -= 10;
+    else if (words < 800) score += 10;
+    else if (words < 2000) score += 18;
+    else score -= 5; // bloated boilerplate
+
+    /* ---------- EVERGREEN LANGUAGE ---------- */
+
+    const evergreenPhrases = [
+      'always looking',
+      'talent community',
+      'may be filled at any time',
+      'join our network',
+      'future opportunities',
+    ];
+
+    const lower = text.toLowerCase();
+    evergreenPhrases.forEach((p) => {
+      if (lower.includes(p)) score -= 8;
+    });
+
+    /* ---------- APPLY SIGNAL ---------- */
+
+    if (lower.includes('apply') || lower.includes('application')) {
+      score += 8;
+    } else {
+      score -= 12;
     }
 
-    let freshness = 'missing';
-    if (daysOld !== null) {
-      if (daysOld <= 45) freshness = 'fresh';
-      else if (daysOld <= 90) freshness = 'aging';
-      else freshness = 'stale';
+    /* ---------- DOMAIN HEURISTICS ---------- */
+
+    if (
+      hostname.includes('indeed') ||
+      hostname.includes('linkedin') ||
+      hostname.includes('greenhouse') ||
+      hostname.includes('workday')
+    ) {
+      score += 10;
     }
 
-let risk = 0;
+    /* ---------- JOB-ID ENTROPY ---------- */
 
+    const entropySource = url.split('?')[0] + hostname;
+    const entropy = stableHash(entropySource) % 9; // 0–8
+    score += entropy;
 
-// Freshness signal (scaled)
-if (daysOld === null) {
-  risk += 28;
-} else if (daysOld > 180) {
-  risk += 42;
-} else if (daysOld > 120) {
-  risk += 34;
-} else if (daysOld > 90) {
-  risk += 26;
-} else if (daysOld > 60) {
-  risk += 18;
-} else if (daysOld > 30) {
-  risk += 10;
-} else {
-  risk += 4;
-}
+    /* ---------- CLAMP ---------- */
 
+    score = Math.max(5, Math.min(score, 95));
 
-const hostname = new URL(url).hostname;
-
-// Evergreen platform weighting
-if (hostname.includes('smartrecruiters')) risk += 14;
-if (hostname.includes('greenhouse')) risk += 12;
-if (hostname.includes('workday')) risk += 10;
-
-// Aggregators often fresher
-if (hostname.includes('indeed')) risk -= 6;
-if (hostname.includes('linkedin')) risk -= 4;
-
-// URL complexity
-const queryCount = (url.match(/=/g) || []).length;
-risk += Math.min(queryCount * 2, 10);
-
-// Normalize to probability-style score
-risk = Math.max(0, Math.min(100, risk));
-const score = Math.round(100 - risk);
-
+    /* ---------- RESPONSE ---------- */
 
     res.json({
       score,
       signals: {
         stale: {
-          result: freshness === 'stale',
-          delay: 1000,
-          info:
-            daysOld !== null
-              ? `${daysOld} days old`
-              : 'No date detected',
+          result: score < 40,
+          delay: 900,
         },
         weak: {
-          result: false,
-          delay: 2200,
+          result: words < 400,
+          delay: 2000,
         },
         inactivity: {
           result: status !== 200,
-          delay: 3400,
+          delay: 3200,
         },
       },
     });
   } catch (err) {
-    res.status(500).json({
-      error: 'Failed to fetch job page',
-    });
+    res.status(500).json({ error: 'Fetch failed' });
   }
 });
 
-/* ---------------- START SERVER ---------------- */
+/* ---------------- START ---------------- */
 
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
