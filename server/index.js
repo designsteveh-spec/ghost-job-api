@@ -57,8 +57,32 @@ app.post('/api/analyze', async (req, res) => {
       else freshness = 'stale';
     }
 
-    const score =
-      freshness === 'fresh' ? 85 : freshness === 'aging' ? 55 : 25;
+    let score = 25;
+
+// Freshness signal (only if available)
+if (freshness === 'fresh') score += 35;
+else if (freshness === 'aging') score += 15;
+
+// Domain heuristics
+const hostname = new URL(url).hostname;
+
+if (
+  hostname.includes('indeed.com') ||
+  hostname.includes('linkedin.com') ||
+  hostname.includes('workday') ||
+  hostname.includes('greenhouse.io')
+) {
+  score += 20;
+}
+
+// Query-string job IDs (often evergreen)
+if (url.includes('?')) {
+  score += 10;
+}
+
+// Clamp score
+score = Math.min(score, 95);
+
 
     res.json({
       score,
