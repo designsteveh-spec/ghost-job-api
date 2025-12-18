@@ -57,31 +57,45 @@ app.post('/api/analyze', async (req, res) => {
       else freshness = 'stale';
     }
 
-    let score = 25;
+let risk = 0;
 
-// Freshness signal (only if available)
-if (freshness === 'fresh') score += 35;
-else if (freshness === 'aging') score += 15;
 
-// Domain heuristics
+// Freshness signal (scaled)
+if (daysOld === null) {
+  risk += 28;
+} else if (daysOld > 180) {
+  risk += 42;
+} else if (daysOld > 120) {
+  risk += 34;
+} else if (daysOld > 90) {
+  risk += 26;
+} else if (daysOld > 60) {
+  risk += 18;
+} else if (daysOld > 30) {
+  risk += 10;
+} else {
+  risk += 4;
+}
+
+
 const hostname = new URL(url).hostname;
 
-if (
-  hostname.includes('indeed.com') ||
-  hostname.includes('linkedin.com') ||
-  hostname.includes('workday') ||
-  hostname.includes('greenhouse.io')
-) {
-  score += 20;
-}
+// Evergreen platform weighting
+if (hostname.includes('smartrecruiters')) risk += 14;
+if (hostname.includes('greenhouse')) risk += 12;
+if (hostname.includes('workday')) risk += 10;
 
-// Query-string job IDs (often evergreen)
-if (url.includes('?')) {
-  score += 10;
-}
+// Aggregators often fresher
+if (hostname.includes('indeed')) risk -= 6;
+if (hostname.includes('linkedin')) risk -= 4;
 
-// Clamp score
-score = Math.min(score, 95);
+// URL complexity
+const queryCount = (url.match(/=/g) || []).length;
+risk += Math.min(queryCount * 2, 10);
+
+// Normalize to probability-style score
+risk = Math.max(0, Math.min(100, risk));
+const score = Math.round(100 - risk);
 
 
     res.json({
