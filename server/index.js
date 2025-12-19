@@ -65,6 +65,28 @@ app.post('/api/analyze', async (req, res) => {
     else if (words < 2000) score += 18;
     else score -= 5; // bloated boilerplate
 
+/* ---------- INDEED STRUCTURE SIGNALS ---------- */
+
+if (hostname.includes('indeed.com')) {
+  // Indeed serves near-identical HTML to scrapers
+  // Penalize uncertainty slightly
+  score -= 4;
+
+  // Job age hints embedded in scripts (when present)
+  if (lower.includes('jobagedays') || lower.includes('ageindays')) {
+    score += 6;
+  }
+
+  // Urgency indicators
+  if (
+    lower.includes('urgently hiring') ||
+    lower.includes('actively hiring')
+  ) {
+    score += 8;
+  }
+}
+
+
     /* ---------- EVERGREEN LANGUAGE ---------- */
 
     const evergreenPhrases = [
@@ -101,9 +123,37 @@ app.post('/api/analyze', async (req, res) => {
 
     /* ---------- JOB-ID ENTROPY ---------- */
 
-    const entropySource = url.split('?')[0] + hostname;
-    const entropy = stableHash(entropySource) % 9; // 0–8
-    score += entropy;
+// Job ID–based entropy (domain-safe)
+let entropySeed = url;
+
+try {
+  const u = new URL(url);
+
+  // Indeed job key
+  if (u.searchParams.get('jk')) {
+    entropySeed = u.searchParams.get('jk');
+  }
+
+  // Greenhouse / Workday numeric IDs
+  const pathMatch = u.pathname.match(/\d{5,}/);
+  if (pathMatch) {
+    entropySeed += pathMatch[0];
+  }
+} catch {}
+
+const entropy = stableHash(entropySeed) % 11; // 0–10
+score += entropy;
+
+/* ---------- SCORE NORMALIZATION ---------- */
+
+// Small deterministic variation to prevent identical scores
+const variationSource =
+  hostname +
+  words.toString() +
+  url.length.toString();
+
+const variation = stableHash(variationSource) % 7; // 0–6
+score += variation - 3; // shifts score by -3 to +3
 
     /* ---------- CLAMP ---------- */
 
