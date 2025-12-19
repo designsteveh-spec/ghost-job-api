@@ -6,12 +6,10 @@ function extractMainText(html, selectors) {
   const lower = html.toLowerCase();
   let total = 0;
   for (const sel of selectors) {
-    // simple substring test for structural hints
     if (lower.includes(sel)) total++;
   }
   return total;
 }
-
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -48,9 +46,7 @@ app.post('/api/analyze', async (req, res) => {
   try {
     const response = await fetch(url, {
       redirect: 'follow',
-      headers: {
-        'User-Agent': 'GhostJobChecker/1.0',
-      },
+      headers: { 'User-Agent': 'GhostJobChecker/1.0' },
     });
 
     const status = response.status;
@@ -66,109 +62,97 @@ app.post('/api/analyze', async (req, res) => {
     if (status === 200) score += 15;
     else score -= 15;
 
-    /* ---------- TEXT LENGTH ---------- */
+    /* ---------- TEXT EXTRACTION ---------- */
 
     const text = html.replace(/<[^>]*>/g, ' ');
+    const lower = text.toLowerCase();
     const words = text.split(/\s+/).filter(Boolean).length;
 
-/* ---------- DESCRIPTION PRESENCE SCORING ---------- */
+    /* ---------- DESCRIPTION PRESENCE SCORING ---------- */
 
-let descSignal = 0;
+    let descSignal = 0;
 
-// Identify site type
-const isIndeed = hostname.includes('indeed.com');
-const isCareerBuilder = hostname.includes('careerbuilder.com');
-const isLinkedIn = hostname.includes('linkedin.com/jobs');
-const isZipRecruiter = hostname.includes('ziprecruiter.com');
+    const isIndeed = hostname.includes('indeed.com');
+    const isCareerBuilder = hostname.includes('careerbuilder.com');
+    const isLinkedIn = hostname.includes('linkedin.com/jobs');
+    const isZipRecruiter = hostname.includes('ziprecruiter.com');
 
-if (isIndeed) {
-  // indeed job description container markers
-  const matches = extractMainText(html, [
-    'jobsearch-JobComponent-description',
-    'jobDescriptionText', 
-    'description__text'
-  ]);
-  if (matches >= 2 && words > 300) descSignal += 12;
-  else if (matches === 1 && words > 150) descSignal += 6;
-  else descSignal -= 10;
-}
+    if (isIndeed) {
+      const matches = extractMainText(html, [
+        'jobsearch-jobcomponent-description',
+        'jobdescriptiontext',
+        'description__text',
+      ]);
+      if (matches >= 2 && words > 300) descSignal += 12;
+      else if (matches === 1 && words > 150) descSignal += 6;
+      else descSignal -= 10;
+    }
 
-if (isCareerBuilder) {
-  // careerbuilder main posting
-  const matches = extractMainText(html, [
-    'job-details-section',
-    'JobDetailDescription'
-  ]);
-  if (matches >= 2 && words > 300) descSignal += 14;
-  else if (matches === 1 && words > 150) descSignal += 7;
-  else descSignal -= 10;
-}
+    if (isCareerBuilder) {
+      const matches = extractMainText(html, [
+        'job-details-section',
+        'jobdetaildescription',
+      ]);
+      if (matches >= 2 && words > 300) descSignal += 14;
+      else if (matches === 1 && words > 150) descSignal += 7;
+      else descSignal -= 10;
+    }
 
-if (isLinkedIn) {
-  // linkedin descriptors
-  const matches = extractMainText(html, [
-    'description__text',
-    'jobs-unified-description'
-  ]);
-  if (matches >= 2 && words > 300) descSignal += 16;
-  else if (matches === 1 && words > 150) descSignal += 8;
-  else descSignal -= 10;
-}
+    if (isLinkedIn) {
+      const matches = extractMainText(html, [
+        'description__text',
+        'jobs-unified-description',
+      ]);
+      if (matches >= 2 && words > 300) descSignal += 16;
+      else if (matches === 1 && words > 150) descSignal += 8;
+      else descSignal -= 10;
+    }
 
-if (isZipRecruiter) {
-  // ziprecruiter posting body indicator
-  const matches = extractMainText(html, [
-    'job-description-text',
-    'job-description'
-  ]);
-  if (matches >= 2 && words > 300) descSignal += 14;
-  else if (matches === 1 && words > 150) descSignal += 7;
-  else descSignal -= 10;
-}
+    if (isZipRecruiter) {
+      const matches = extractMainText(html, [
+        'job-description-text',
+        'job-description',
+      ]);
+      if (matches >= 2 && words > 300) descSignal += 14;
+      else if (matches === 1 && words > 150) descSignal += 7;
+      else descSignal -= 10;
+    }
 
-// Apply the description signal to score
-score += descSignal;
+    score += descSignal;
 
+    /* ---------- LENGTH HEURISTICS ---------- */
 
     if (words < 300) score -= 10;
     else if (words < 800) score += 10;
     else if (words < 2000) score += 18;
-    else score -= 5; // bloated boilerplate
+    else score -= 5;
 
-/* ---------- INDEED STRUCTURE SIGNALS ---------- */
+    /* ---------- INDEED STRUCTURE SIGNALS ---------- */
 
-if (hostname.includes('indeed.com')) {
-  // Indeed serves near-identical HTML to scrapers
-  // Penalize uncertainty slightly
-  score -= 4;
+    if (isIndeed) {
+      score -= 4;
 
-  // Job age hints embedded in scripts (when present)
-  if (lower.includes('jobagedays') || lower.includes('ageindays')) {
-    score += 6;
-  }
+      if (lower.includes('jobagedays') || lower.includes('ageindays')) {
+        score += 6;
+      }
 
-  // Urgency indicators
-  if (
-    lower.includes('urgently hiring') ||
-    lower.includes('actively hiring')
-  ) {
-    score += 8;
-  }
-}
-
+      if (
+        lower.includes('urgently hiring') ||
+        lower.includes('actively hiring')
+      ) {
+        score += 8;
+      }
+    }
 
     /* ---------- EVERGREEN LANGUAGE ---------- */
 
-    const evergreenPhrases = [
+    [
       'always looking',
       'talent community',
       'may be filled at any time',
       'join our network',
       'future opportunities',
-    ];
-
-    const lower = text.toLowerCase();
-    evergreenPhrases.forEach((p) => {
+    ].forEach((p) => {
       if (lower.includes(p)) score -= 8;
     });
 
@@ -193,37 +177,24 @@ if (hostname.includes('indeed.com')) {
 
     /* ---------- JOB-ID ENTROPY ---------- */
 
-// Job ID–based entropy (domain-safe)
-let entropySeed = url;
+    let entropySeed = url;
 
-try {
-  const u = new URL(url);
+    try {
+      const u = new URL(url);
+      if (u.searchParams.get('jk')) entropySeed = u.searchParams.get('jk');
+      const pathMatch = u.pathname.match(/\d{5,}/);
+      if (pathMatch) entropySeed += pathMatch[0];
+    } catch {}
 
-  // Indeed job key
-  if (u.searchParams.get('jk')) {
-    entropySeed = u.searchParams.get('jk');
-  }
+    score += stableHash(entropySeed) % 11;
 
-  // Greenhouse / Workday numeric IDs
-  const pathMatch = u.pathname.match(/\d{5,}/);
-  if (pathMatch) {
-    entropySeed += pathMatch[0];
-  }
-} catch {}
+    /* ---------- SCORE NORMALIZATION ---------- */
 
-const entropy = stableHash(entropySeed) % 11; // 0–10
-score += entropy;
+    const variationSource =
+      hostname + words.toString() + url.length.toString();
 
-/* ---------- SCORE NORMALIZATION ---------- */
-
-// Small deterministic variation to prevent identical scores
-const variationSource =
-  hostname +
-  words.toString() +
-  url.length.toString();
-
-const variation = stableHash(variationSource) % 7; // 0–6
-score += variation - 3; // shifts score by -3 to +3
+    const variation = stableHash(variationSource) % 7;
+    score += variation - 3;
 
     /* ---------- CLAMP ---------- */
 
@@ -234,42 +205,25 @@ score += variation - 3; // shifts score by -3 to +3
     res.json({
       score,
       signals: {
-        stale: {
-          result: score < 40,
-          delay: 900,
-        },
-        weak: {
-          result: words < 400,
-          delay: 2000,
-        },
-        inactivity: {
-          result: status !== 200,
-          delay: 3200,
-        },
+        stale: { result: score < 40, delay: 900 },
+        weak: { result: words < 400, delay: 2000 },
+        inactivity: { result: status !== 200, delay: 3200 },
       },
     });
-} catch (err) {
-  // Fallback for blocked sites (e.g. Indeed)
-  res.json({
-    score: 30,
-    signals: {
-      stale: {
-        result: true,
-        delay: 900,
-        info: 'Page blocked automated access',
+  } catch (err) {
+    res.json({
+      score: 30,
+      signals: {
+        stale: {
+          result: true,
+          delay: 900,
+          info: 'Page blocked automated access',
+        },
+        weak: { result: true, delay: 2000 },
+        inactivity: { result: false, delay: 3200 },
       },
-      weak: {
-        result: true,
-        delay: 2000,
-      },
-      inactivity: {
-        result: false,
-        delay: 3200,
-      },
-    },
-  });
-}
-
+    });
+  }
 });
 
 /* ---------------- START ---------------- */
