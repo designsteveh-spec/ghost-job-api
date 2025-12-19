@@ -27,6 +27,24 @@ app.get('/api/health', (req, res) => {
 
 /* ---------------- HELPERS ---------------- */
 
+function extractEmployerLink(html) {
+  const matchers = [
+    /apply on company site[^>]*href="([^"]+)"/i,
+    /apply on employer site[^>]*href="([^"]+)"/i,
+    /href="([^"]+)"[^>]*>Apply on company site/i,
+  ];
+
+  for (const rx of matchers) {
+    const match = html.match(rx);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+
 function stableHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -39,14 +57,28 @@ function stableHash(str) {
 /* ---------------- ANALYZE ---------------- */
 
 app.post('/api/analyze', async (req, res) => {
-  const { url } = req.body;
+  const { url, pastedText } = req.body;
 
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'Invalid URL' });
   }
 
   try {
-    const response = await fetch(url, {
+    let html = '';
+let hostname = '';
+
+if (pastedText) {
+  html = pastedText;
+  hostname = 'user-pasted';
+} else {
+  const response = await fetch(url, {
+    redirect: 'follow',
+    headers: { 'User-Agent': 'GhostJobChecker/1.0' },
+  });
+
+  hostname = new URL(url).hostname;
+  html = await response.text();
+}
       redirect: 'follow',
       headers: {
         'User-Agent': 'GhostJobChecker/1.0',
@@ -54,8 +86,25 @@ app.post('/api/analyze', async (req, res) => {
     });
 
     const status = response.status;
-    const html = await response.text();
-    const hostname = new URL(url).hostname;
+    let html = await response.text();
+let hostname = new URL(url).hostname;
+
+const employerLink = extractEmployerLink(html);
+
+if (employerLink) {
+  try {
+    const employerRes = await fetch(employerLink, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'GhostJobChecker/1.0' },
+    });
+
+    if (employerRes.ok) {
+      html = await employerRes.text();
+      hostname = new URL(employerLink).hostname;
+    }
+  } catch (_) {}
+}
+
 
     /* ---------- BASE SCORE ---------- */
 
