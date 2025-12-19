@@ -2,6 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
 
+function extractMainText(html, selectors) {
+  const lower = html.toLowerCase();
+  let total = 0;
+  for (const sel of selectors) {
+    // simple substring test for structural hints
+    if (lower.includes(sel)) total++;
+  }
+  return total;
+}
+
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -59,6 +70,65 @@ app.post('/api/analyze', async (req, res) => {
 
     const text = html.replace(/<[^>]*>/g, ' ');
     const words = text.split(/\s+/).filter(Boolean).length;
+
+/* ---------- DESCRIPTION PRESENCE SCORING ---------- */
+
+let descSignal = 0;
+
+// Identify site type
+const isIndeed = hostname.includes('indeed.com');
+const isCareerBuilder = hostname.includes('careerbuilder.com');
+const isLinkedIn = hostname.includes('linkedin.com/jobs');
+const isZipRecruiter = hostname.includes('ziprecruiter.com');
+
+if (isIndeed) {
+  // indeed job description container markers
+  const matches = extractMainText(html, [
+    'jobsearch-JobComponent-description',
+    'jobDescriptionText', 
+    'description__text'
+  ]);
+  if (matches >= 2 && words > 300) descSignal += 12;
+  else if (matches === 1 && words > 150) descSignal += 6;
+  else descSignal -= 10;
+}
+
+if (isCareerBuilder) {
+  // careerbuilder main posting
+  const matches = extractMainText(html, [
+    'job-details-section',
+    'JobDetailDescription'
+  ]);
+  if (matches >= 2 && words > 300) descSignal += 14;
+  else if (matches === 1 && words > 150) descSignal += 7;
+  else descSignal -= 10;
+}
+
+if (isLinkedIn) {
+  // linkedin descriptors
+  const matches = extractMainText(html, [
+    'description__text',
+    'jobs-unified-description'
+  ]);
+  if (matches >= 2 && words > 300) descSignal += 16;
+  else if (matches === 1 && words > 150) descSignal += 8;
+  else descSignal -= 10;
+}
+
+if (isZipRecruiter) {
+  // ziprecruiter posting body indicator
+  const matches = extractMainText(html, [
+    'job-description-text',
+    'job-description'
+  ]);
+  if (matches >= 2 && words > 300) descSignal += 14;
+  else if (matches === 1 && words > 150) descSignal += 7;
+  else descSignal -= 10;
+}
+
+// Apply the description signal to score
+score += descSignal;
+
 
     if (words < 300) score -= 10;
     else if (words < 800) score += 10;
