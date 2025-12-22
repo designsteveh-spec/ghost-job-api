@@ -44,10 +44,17 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
-    const response = await fetch(url, {
-      redirect: 'follow',
-      headers: { 'User-Agent': 'GhostJobChecker/1.0' },
-    });
+  const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), 6000);
+
+const response = await fetch(url, {
+  redirect: 'follow',
+  signal: controller.signal,
+  headers: { 'User-Agent': 'GhostJobChecker/1.0' },
+});
+
+clearTimeout(timeout);
+
 
     const status = response.status;
     const html = await response.text();
@@ -231,3 +238,20 @@ app.post('/api/analyze', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
+
+
+.result-active {
+  color: #806655;
+  font-weight: 600;
+}
+
+.primary-cta {
+  background-color: #FFCD2E;
+  border: 2px solid #4040FF;
+  color: #4040FF;
+  font-weight: 600;
+}
+
+.primary-cta:hover {
+  background-color: #ffd84d;
+}
