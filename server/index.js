@@ -239,19 +239,3 @@ app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
 
-
-.result-active {
-  color: #806655;
-  font-weight: 600;
-}
-
-.primary-cta {
-  background-color: #FFCD2E;
-  border: 2px solid #4040FF;
-  color: #4040FF;
-  font-weight: 600;
-}
-
-.primary-cta:hover {
-  background-color: #ffd84d;
-}
