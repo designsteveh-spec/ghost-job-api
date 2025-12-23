@@ -98,8 +98,6 @@ let descSignal = 0;
     const isZipRecruiter = hostname.includes('ziprecruiter.com');
 	const isSimplyHired = hostname.includes('simplyhired.com');
 
-const isSimplyHired = hostname.includes('simplyhired.com');
-
     if (isIndeed) {
       const matches = extractMainText(html, [
         'jobsearch-jobcomponent-description',
@@ -181,10 +179,10 @@ if (isSimplyHired) {
 
     /* ---------- LENGTH HEURISTICS ---------- */
 
-    if (words < 300) {
-  if (isSimplyHired) score -= 4;
-  else score -= 10;
+if (words < 300) {
+  if (!isSimplyHired) score -= 10;
 }
+
     else if (words < 800) score += 10;
     else if (words < 2000) score += 18;
     else score -= 5;
@@ -215,16 +213,18 @@ if (isSimplyHired) {
       'join our network',
       'future opportunities',
     ].forEach((p) => {
-      if (lower.includes(p)) score -= 8;
-    });
+  if (lower.includes(p) && !isSimplyHired) score -= 8;
+});
+
 
     /* ---------- APPLY SIGNAL ---------- */
 
-    if (lower.includes('apply') || lower.includes('application')) {
-      score += 8;
-    } else {
-      score -= 12;
-    }
+if (lower.includes('apply') || lower.includes('application')) {
+  score += 8;
+} else if (!isSimplyHired) {
+  score -= 12;
+}
+
 
     /* ---------- DOMAIN HEURISTICS ---------- */
 
@@ -258,7 +258,7 @@ if (isSimplyHired) {
       if (pathMatch) entropySeed += pathMatch[0];
     } catch {}
 
-    score += stableHash(entropySeed) % 11;
+    score += stableHash(entropySeed) % (isSimplyHired ? 17 : 11);
 
     /* ---------- SCORE NORMALIZATION ---------- */
 
@@ -270,7 +270,12 @@ if (isSimplyHired) {
 
     /* ---------- CLAMP ---------- */
 
-    score = Math.max(5, Math.min(score, 95));
+    if (isSimplyHired) {
+  score = Math.max(18, score);
+}
+
+score = Math.max(5, Math.min(score, 95));
+
 
     /* ---------- RESPONSE ---------- */
 
