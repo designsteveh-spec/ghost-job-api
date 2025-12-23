@@ -25,6 +25,18 @@ app.get('/api/health', (req, res) => {
 
 /* ---------------- HELPERS ---------------- */
 
+function hasOutboundApply(html) {
+  const lower = html.toLowerCase();
+  return (
+    lower.includes('apply on company site') ||
+    lower.includes('apply now') ||
+    lower.includes('external job') ||
+    lower.includes('rel="nofollow"') ||
+    lower.includes('onclick="apply"')
+  );
+}
+
+
 function stableHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -84,6 +96,8 @@ let descSignal = 0;
     const isCareerBuilder = hostname.includes('careerbuilder.com');
     const isLinkedIn = hostname.includes('linkedin.com/jobs');
     const isZipRecruiter = hostname.includes('ziprecruiter.com');
+	const isSimplyHired = hostname.includes('simplyhired.com');
+
 const isSimplyHired = hostname.includes('simplyhired.com');
 
     if (isIndeed) {
@@ -126,6 +140,27 @@ const isSimplyHired = hostname.includes('simplyhired.com');
       else if (matches === 1 && words > 150) descSignal += 7;
       else descSignal -= 10;
     }
+
+/* ---------- SIMPLYHIRED AGGREGATOR HANDLING ---------- */
+
+if (isSimplyHired) {
+  // SimplyHired is an aggregator shell, not a job host
+
+  // Neutralize harsh low-word penalties
+  if (words < 300) score += 8;
+
+  // Outbound apply link = likely real job
+  if (hasOutboundApply(html)) {
+    score += 12;
+  } else {
+    score -= 4;
+  }
+
+  // Cap confidence range for aggregators
+  score = Math.min(score, 70);
+  score = Math.max(score, 18);
+}
+
 	
 	if (isSimplyHired) {
   // SimplyHired renders via JS / embedded JSON
