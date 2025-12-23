@@ -75,14 +75,16 @@ clearTimeout(timeout);
     const lower = text.toLowerCase();
     const words = text.split(/\s+/).filter(Boolean).length;
 
-    /* ---------- DESCRIPTION PRESENCE SCORING ---------- */
+/* ---------- DESCRIPTION PRESENCE SCORING ---------- */
 
-    let descSignal = 0;
+let descSignal = 0;
+
 
     const isIndeed = hostname.includes('indeed.com');
     const isCareerBuilder = hostname.includes('careerbuilder.com');
     const isLinkedIn = hostname.includes('linkedin.com/jobs');
     const isZipRecruiter = hostname.includes('ziprecruiter.com');
+const isSimplyHired = hostname.includes('simplyhired.com');
 
     if (isIndeed) {
       const matches = extractMainText(html, [
@@ -124,12 +126,30 @@ clearTimeout(timeout);
       else if (matches === 1 && words > 150) descSignal += 7;
       else descSignal -= 10;
     }
+	
+	if (isSimplyHired) {
+  // SimplyHired renders via JS / embedded JSON
+  const matches = extractMainText(html, [
+    'jobdescription',
+    'job-description',
+    'jobposting',
+    'application/ld+json',
+  ]);
+
+  if (matches >= 2 && words > 200) descSignal += 10;
+  else if (matches >= 1) descSignal += 4;
+  else descSignal -= 6; // softer penalty than unknown sites
+}
+
 
     score += descSignal;
 
     /* ---------- LENGTH HEURISTICS ---------- */
 
-    if (words < 300) score -= 10;
+    if (words < 300) {
+  if (isSimplyHired) score -= 4;
+  else score -= 10;
+}
     else if (words < 800) score += 10;
     else if (words < 2000) score += 18;
     else score -= 5;
@@ -181,10 +201,20 @@ clearTimeout(timeout);
     ) {
       score += 10;
     }
+	
+	if (isSimplyHired) {
+  score += 6; // aggregator trust, lower than Indeed
+}
+
 
     /* ---------- JOB-ID ENTROPY ---------- */
 
     let entropySeed = url;
+	
+	if (isSimplyHired) {
+  entropySeed = url + words.toString();
+}
+
 
     try {
       const u = new URL(url);
