@@ -49,11 +49,67 @@ function stableHash(str) {
 /* ---------------- ANALYZE ---------------- */
 
 app.post('/api/analyze', async (req, res) => {
-  const { url } = req.body;
+  const { url: rawUrl, jobDescription: rawJobDescription } = req.body;
 
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'Invalid URL' });
+  const urlValue = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  const descValue =
+    typeof rawJobDescription === 'string' ? rawJobDescription.trim() : '';
+
+  // Must provide at least one input
+  if (!urlValue && !descValue) {
+    return res
+      .status(400)
+      .json({ error: 'Provide a job link or a job description.' });
   }
+
+  // ✅ Description-only path (Deep Check)
+  if (!urlValue && descValue) {
+    const text = descValue;
+    const lower = text.toLowerCase();
+    const words = text.split(/\s+/).filter(Boolean).length;
+
+    let score = 20;
+
+    // Length heuristic
+    if (words < 150) score -= 10;
+    else if (words < 400) score += 6;
+    else if (words < 1000) score += 12;
+    else score += 18;
+
+    // Evergreen / “talent community” language
+    [
+      'always looking',
+      'talent community',
+      'may be filled at any time',
+      'join our network',
+      'future opportunities',
+    ].forEach((p) => {
+      if (lower.includes(p)) score -= 8;
+    });
+
+    // Apply language
+    if (lower.includes('apply') || lower.includes('application')) score += 8;
+    else score -= 6;
+
+    // Add some deterministic variability
+    score += stableHash(text.slice(0, 2000)) % 11;
+
+    // Clamp
+    score = Math.max(5, Math.min(score, 95));
+
+    return res.json({
+      score,
+      signals: {
+        stale: { result: score < 40, delay: 900 },
+        weak: { result: words < 400, delay: 2000 },
+        inactivity: { result: false, delay: 3200 },
+      },
+    });
+  }
+
+  // ✅ URL path (existing behavior)
+  const url = urlValue;
+
 
   try {
   const controller = new AbortController();
