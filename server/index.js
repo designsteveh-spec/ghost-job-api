@@ -46,7 +46,37 @@ function stableHash(str) {
   return Math.abs(hash);
 }
 
-/* ---------------- ANALYZE ---------------- */
+/* ---------------- DETECTION HELPERS ---------------- */
+
+// A) Canonical Job ID (URL-derived only; safe + deterministic)
+function extractCanonicalJobIdFromUrl(u) {
+  try {
+    const qp = u.searchParams;
+
+    const fromQuery = (
+      qp.get('jk') ||
+      qp.get('jobId') ||
+      qp.get('job_id') ||
+      qp.get('job') ||
+      ''
+    ).trim();
+
+    if (fromQuery) return fromQuery;
+
+    const path = u.pathname || '';
+    const last = path.split('/').filter(Boolean).pop() || '';
+    if (/^[a-z0-9-]{8,}$/i.test(last)) return last;
+
+    const m = path.match(/\d{5,}/);
+    if (m) return m[0];
+  } catch {}
+
+  return null;
+}
+
+// A) JSON-LD datePosted detection (preferred)
+function extractJson
+
 
 app.post('/api/analyze', async (req, res) => {
   const { url: rawUrl, jobDescription: rawJobDescription } = req.body;
@@ -97,14 +127,20 @@ app.post('/api/analyze', async (req, res) => {
     // Clamp
     score = Math.max(5, Math.min(score, 95));
 
-    return res.json({
+        return res.json({
       score,
+      detected: {
+        postingAge: null,
+        employerSource: null,
+        canonicalJobId: null,
+      },
       signals: {
         stale: { result: score < 40, delay: 900 },
         weak: { result: words < 400, delay: 2000 },
         inactivity: { result: false, delay: 3200 },
       },
     });
+
   }
 
   // ✅ URL path (existing behavior)
@@ -127,8 +163,12 @@ app.post('/api/analyze', async (req, res) => {
     });
   }
 
+  // Detected (safe, deterministic). Posting age is filled after we fetch HTML.
+  const detectedEmployerSource = parsedUrl.hostname || null;
+  const detectedCanonicalJobId = extractCanonicalJobIdFromUrl(parsedUrl);
 
   try {
+
   const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), 6000);
 
@@ -141,9 +181,16 @@ const response = await fetch(url, {
 clearTimeout(timeout);
 
 
-    const status = response.status;
+        const status = response.status;
     const html = await response.text();
+
+    // Posting age detection (JSON-LD datePosted first, then inline "Posted X days ago")
+    // NOTE: This does NOT affect scoring unless you later choose to use it.
+    const detectedPostingAge = detectPostingAgeFromHtml(html) || null;
+
+    // hostname already available via detectedEmployerSource
     const hostname = parsedUrl.hostname;
+
 
     /* ---------- BASE SCORE ---------- */
 
@@ -352,14 +399,20 @@ score = Math.max(5, Math.min(score, 95));
 
     /* ---------- RESPONSE ---------- */
 
-    res.json({
+        res.json({
       score,
+      detected: {
+        postingAge: detectedPostingAge,
+        employerSource: detectedEmployerSource,
+        canonicalJobId: detectedCanonicalJobId,
+      },
       signals: {
         stale: { result: score < 40, delay: 900 },
         weak: { result: words < 400, delay: 2000 },
         inactivity: { result: status !== 200, delay: 3200 },
       },
     });
+
     } catch (err) {
     const code = err?.code || err?.cause?.code;
     const msg = String(err?.message || '').toLowerCase();
@@ -373,15 +426,26 @@ score = Math.max(5, Math.min(score, 95));
       msg.includes('enotfound') ||
       msg.includes('name not resolved');
 
-    if (isDnsFailure) {
+        if (isDnsFailure) {
       return res.status(400).json({
         error: `We couldn’t reach that domain (${parsedUrl.hostname}). It may be misspelled or offline. Please double-check the link.`,
+        detected: {
+          postingAge: null,
+          employerSource: detectedEmployerSource,
+          canonicalJobId: detectedCanonicalJobId,
+        },
       });
     }
 
+
     // Everything else: keep your existing fallback behavior (no regression)
-    res.json({
+        res.json({
       score: 30,
+      detected: {
+        postingAge: null,
+        employerSource: detectedEmployerSource,
+        canonicalJobId: detectedCanonicalJobId,
+      },
       signals: {
         stale: {
           result: true,
@@ -392,6 +456,7 @@ score = Math.max(5, Math.min(score, 95));
         inactivity: { result: false, delay: 3200 },
       },
     });
+
   }
 
 });
