@@ -110,6 +110,23 @@ app.post('/api/analyze', async (req, res) => {
   // ✅ URL path (existing behavior)
   const url = urlValue;
 
+  // Soft validation: only reject if the URL is malformed / unsupported protocol.
+  // This does NOT change behavior for valid working links.
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return res.status(400).json({
+      error: 'That link doesn’t look valid. Please paste the full URL starting with https://',
+    });
+  }
+
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return res.status(400).json({
+      error: 'Please use a normal http(s) link (starting with https://).',
+    });
+  }
+
 
   try {
   const controller = new AbortController();
@@ -126,7 +143,7 @@ clearTimeout(timeout);
 
     const status = response.status;
     const html = await response.text();
-    const hostname = new URL(url).hostname;
+    const hostname = parsedUrl.hostname;
 
     /* ---------- BASE SCORE ---------- */
 
@@ -343,20 +360,40 @@ score = Math.max(5, Math.min(score, 95));
         inactivity: { result: status !== 200, delay: 3200 },
       },
     });
-  } catch (err) {
+    } catch (err) {
+    const code = err?.code || err?.cause?.code;
+    const msg = String(err?.message || '').toLowerCase();
+
+    // Soft handling for unreachable / fake domains (NXDOMAIN / DNS failures)
+    const isDnsFailure =
+      code === 'ENOTFOUND' ||
+      code === 'EAI_AGAIN' ||
+      code === 'ERR_NAME_NOT_RESOLVED' ||
+      msg.includes('getaddrinfo') ||
+      msg.includes('enotfound') ||
+      msg.includes('name not resolved');
+
+    if (isDnsFailure) {
+      return res.status(400).json({
+        error: `We couldn’t reach that domain (${parsedUrl.hostname}). It may be misspelled or offline. Please double-check the link.`,
+      });
+    }
+
+    // Everything else: keep your existing fallback behavior (no regression)
     res.json({
       score: 30,
       signals: {
         stale: {
           result: true,
           delay: 900,
-          info: 'Page blocked automated access',
+          info: 'Network issue while loading this page',
         },
         weak: { result: true, delay: 2000 },
         inactivity: { result: false, delay: 3200 },
       },
     });
   }
+
 });
 
 /* ---------------- START ---------------- */
