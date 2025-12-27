@@ -382,7 +382,7 @@ app.post('/api/analyze', async (req, res) => {
     const status = response.status;
     const html = await response.text();
 
-const DEBUG_POSTING_AGE = false; // set true temporarily
+const DEBUG_POSTING_AGE = true; // set false after testing
 if (DEBUG_POSTING_AGE) {
   console.log('[posting-age] host=', detectedEmployerSource);
   console.log('[posting-age] html_len=', html.length);
@@ -398,9 +398,8 @@ if (DEBUG_POSTING_AGE) {
     // NOTE: This does NOT affect scoring unless you later choose to use it.
     const detectedPostingAge = detectPostingAgeFromHtml(html) || null;
 
-    const hostname = parsedUrl.hostname;
-	
-	const DEBUG_POSTING_AGE = true;
+        const hostname = parsedUrl.hostname;
+
 
 
     /* ---------- BASE SCORE ---------- */
