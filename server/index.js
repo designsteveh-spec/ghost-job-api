@@ -36,7 +36,6 @@ function hasOutboundApply(html) {
   );
 }
 
-
 function stableHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -75,8 +74,127 @@ function extractCanonicalJobIdFromUrl(u) {
 }
 
 // A) JSON-LD datePosted detection (preferred)
-function extractJson
+// Returns an ISO-ish date string when found, else null.
+function extractJsonLdDatePosted(html) {
+  if (!html) return null;
 
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+
+  const tryFindDateInNode = (node) => {
+    if (!node || typeof node !== 'object') return null;
+
+    // Direct
+    if (typeof node.datePosted === 'string' && node.datePosted.trim()) return node.datePosted.trim();
+    if (typeof node.dateCreated === 'string' && node.dateCreated.trim()) return node.dateCreated.trim();
+
+    // Sometimes wrapped in @graph
+    if (Array.isArray(node['@graph'])) {
+      for (const g of node['@graph']) {
+        const found = tryFindDateInNode(g);
+        if (found) return found;
+      }
+    }
+
+    // Sometimes an array of objects
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const found = tryFindDateInNode(item);
+        if (found) return found;
+      }
+    }
+
+    return null;
+  };
+
+  while ((m = re.exec(html)) !== null) {
+    const raw = (m[1] || '').trim();
+    if (!raw) continue;
+
+    // Some sites include multiple JSON objects without being valid JSON; keep it conservative:
+    // - First try JSON.parse as-is
+    // - If it fails, skip (don’t risk breaking working links)
+    try {
+      const parsed = JSON.parse(raw);
+
+      // If it's JobPosting, great. If it's other, still try (some embed JobPosting nested)
+      const direct = tryFindDateInNode(parsed);
+      if (direct) return direct;
+    } catch {
+      // ignore parse errors safely
+    }
+  }
+
+  return null;
+}
+
+function formatAgeFromDateString(dateStr) {
+  if (!dateStr) return null;
+
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return null;
+
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+
+  // If date is in the future by a lot, ignore (bad metadata)
+  if (diffMs < -6 * 60 * 60 * 1000) return null;
+
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+
+  if (diffDays <= 0) {
+    if (diffHours <= 0) return 'Posted today';
+    if (diffHours === 1) return 'Posted 1 hour ago';
+    return `Posted ${diffHours} hours ago`;
+  }
+
+  if (diffDays === 1) return 'Posted 1 day ago';
+  return `Posted ${diffDays} days ago`;
+}
+
+// B) Inline age signal parsing (fallback)
+function extractInlinePostedAge(html) {
+  const lower = (html || '').toLowerCase();
+
+  if (lower.includes('just posted')) return 'Just posted';
+  if (lower.includes('posted today') || lower.includes('today')) {
+    // keep conservative: only return if “posted” appears nearby
+    if (lower.includes('posted')) return 'Posted today';
+  }
+
+  // Posted X days ago
+  let m = lower.match(/posted\s+(\d+)\+?\s+day[s]?\s+ago/);
+  if (m && m[1]) return `Posted ${m[1]} days ago`;
+
+  // Posted X hours ago
+  m = lower.match(/posted\s+(\d+)\+?\s+hour[s]?\s+ago/);
+  if (m && m[1]) return `Posted ${m[1]} hours ago`;
+
+  // X days ago (without "posted" but often seen in UI)
+  m = lower.match(/(\d+)\+?\s+day[s]?\s+ago/);
+  if (m && m[1]) return `Posted ${m[1]} days ago`;
+
+  // X hours ago
+  m = lower.match(/(\d+)\+?\s+hour[s]?\s+ago/);
+  if (m && m[1]) return `Posted ${m[1]} hours ago`;
+
+  return null;
+}
+
+// Master: JSON-LD first, then inline
+function detectPostingAgeFromHtml(html) {
+  const jsonLdDate = extractJsonLdDatePosted(html);
+  const fromJsonLd = formatAgeFromDateString(jsonLdDate);
+  if (fromJsonLd) return fromJsonLd;
+
+  const inline = extractInlinePostedAge(html);
+  if (inline) return inline;
+
+  return null;
+}
+
+/* ---------------- ANALYZE ---------------- */
 
 app.post('/api/analyze', async (req, res) => {
   const { url: rawUrl, jobDescription: rawJobDescription } = req.body;
@@ -127,7 +245,7 @@ app.post('/api/analyze', async (req, res) => {
     // Clamp
     score = Math.max(5, Math.min(score, 95));
 
-        return res.json({
+    return res.json({
       score,
       detected: {
         postingAge: null,
@@ -140,7 +258,6 @@ app.post('/api/analyze', async (req, res) => {
         inactivity: { result: false, delay: 3200 },
       },
     });
-
   }
 
   // ✅ URL path (existing behavior)
@@ -168,29 +285,25 @@ app.post('/api/analyze', async (req, res) => {
   const detectedCanonicalJobId = extractCanonicalJobIdFromUrl(parsedUrl);
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
 
-  const controller = new AbortController();
-const timeout = setTimeout(() => controller.abort(), 6000);
+    const response = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'GhostJobChecker/1.0' },
+    });
 
-const response = await fetch(url, {
-  redirect: 'follow',
-  signal: controller.signal,
-  headers: { 'User-Agent': 'GhostJobChecker/1.0' },
-});
+    clearTimeout(timeout);
 
-clearTimeout(timeout);
-
-
-        const status = response.status;
+    const status = response.status;
     const html = await response.text();
 
     // Posting age detection (JSON-LD datePosted first, then inline "Posted X days ago")
     // NOTE: This does NOT affect scoring unless you later choose to use it.
     const detectedPostingAge = detectPostingAgeFromHtml(html) || null;
 
-    // hostname already available via detectedEmployerSource
     const hostname = parsedUrl.hostname;
-
 
     /* ---------- BASE SCORE ---------- */
 
@@ -207,16 +320,15 @@ clearTimeout(timeout);
     const lower = text.toLowerCase();
     const words = text.split(/\s+/).filter(Boolean).length;
 
-/* ---------- DESCRIPTION PRESENCE SCORING ---------- */
+    /* ---------- DESCRIPTION PRESENCE SCORING ---------- */
 
-let descSignal = 0;
-
+    let descSignal = 0;
 
     const isIndeed = hostname.includes('indeed.com');
     const isCareerBuilder = hostname.includes('careerbuilder.com');
     const isLinkedIn = hostname.includes('linkedin.com/jobs');
     const isZipRecruiter = hostname.includes('ziprecruiter.com');
-	const isSimplyHired = hostname.includes('simplyhired.com');
+    const isSimplyHired = hostname.includes('simplyhired.com');
 
     if (isIndeed) {
       const matches = extractMainText(html, [
@@ -259,51 +371,47 @@ let descSignal = 0;
       else descSignal -= 10;
     }
 
-/* ---------- SIMPLYHIRED AGGREGATOR HANDLING ---------- */
+    /* ---------- SIMPLYHIRED AGGREGATOR HANDLING ---------- */
 
-if (isSimplyHired) {
-  // SimplyHired is an aggregator shell, not a job host
+    if (isSimplyHired) {
+      // SimplyHired is an aggregator shell, not a job host
 
-  // Neutralize harsh low-word penalties
-  if (words < 300) score += 8;
+      // Neutralize harsh low-word penalties
+      if (words < 300) score += 8;
 
-  // Outbound apply link = likely real job
-  if (hasOutboundApply(html)) {
-    score += 12;
-  } else {
-    score -= 4;
-  }
+      // Outbound apply link = likely real job
+      if (hasOutboundApply(html)) {
+        score += 12;
+      } else {
+        score -= 4;
+      }
 
-  // Cap confidence range for aggregators
-  score = Math.min(score, 70);
-  score = Math.max(score, 18);
-}
+      // Cap confidence range for aggregators
+      score = Math.min(score, 70);
+      score = Math.max(score, 18);
+    }
 
-	
-	if (isSimplyHired) {
-  // SimplyHired renders via JS / embedded JSON
-  const matches = extractMainText(html, [
-    'jobdescription',
-    'job-description',
-    'jobposting',
-    'application/ld+json',
-  ]);
+    if (isSimplyHired) {
+      // SimplyHired renders via JS / embedded JSON
+      const matches = extractMainText(html, [
+        'jobdescription',
+        'job-description',
+        'jobposting',
+        'application/ld+json',
+      ]);
 
-  if (matches >= 2 && words > 200) descSignal += 10;
-  else if (matches >= 1) descSignal += 4;
-  else descSignal -= 6; // softer penalty than unknown sites
-}
-
+      if (matches >= 2 && words > 200) descSignal += 10;
+      else if (matches >= 1) descSignal += 4;
+      else descSignal -= 6; // softer penalty than unknown sites
+    }
 
     score += descSignal;
 
     /* ---------- LENGTH HEURISTICS ---------- */
 
-if (words < 300) {
-  if (!isSimplyHired) score -= 10;
-}
-
-    else if (words < 800) score += 10;
+    if (words < 300) {
+      if (!isSimplyHired) score -= 10;
+    } else if (words < 800) score += 10;
     else if (words < 2000) score += 18;
     else score -= 5;
 
@@ -316,10 +424,7 @@ if (words < 300) {
         score += 6;
       }
 
-      if (
-        lower.includes('urgently hiring') ||
-        lower.includes('actively hiring')
-      ) {
+      if (lower.includes('urgently hiring') || lower.includes('actively hiring')) {
         score += 8;
       }
     }
@@ -333,18 +438,16 @@ if (words < 300) {
       'join our network',
       'future opportunities',
     ].forEach((p) => {
-  if (lower.includes(p) && !isSimplyHired) score -= 8;
-});
-
+      if (lower.includes(p) && !isSimplyHired) score -= 8;
+    });
 
     /* ---------- APPLY SIGNAL ---------- */
 
-if (lower.includes('apply') || lower.includes('application')) {
-  score += 8;
-} else if (!isSimplyHired) {
-  score -= 12;
-}
-
+    if (lower.includes('apply') || lower.includes('application')) {
+      score += 8;
+    } else if (!isSimplyHired) {
+      score -= 12;
+    }
 
     /* ---------- DOMAIN HEURISTICS ---------- */
 
@@ -356,20 +459,18 @@ if (lower.includes('apply') || lower.includes('application')) {
     ) {
       score += 10;
     }
-	
-	if (isSimplyHired) {
-  score += 6; // aggregator trust, lower than Indeed
-}
 
+    if (isSimplyHired) {
+      score += 6; // aggregator trust, lower than Indeed
+    }
 
     /* ---------- JOB-ID ENTROPY ---------- */
 
     let entropySeed = url;
-	
-	if (isSimplyHired) {
-  entropySeed = url + words.toString();
-}
 
+    if (isSimplyHired) {
+      entropySeed = url + words.toString();
+    }
 
     try {
       const u = new URL(url);
@@ -391,15 +492,14 @@ if (lower.includes('apply') || lower.includes('application')) {
     /* ---------- CLAMP ---------- */
 
     if (isSimplyHired) {
-  score = Math.max(18, score);
-}
+      score = Math.max(18, score);
+    }
 
-score = Math.max(5, Math.min(score, 95));
-
+    score = Math.max(5, Math.min(score, 95));
 
     /* ---------- RESPONSE ---------- */
 
-        res.json({
+    return res.json({
       score,
       detected: {
         postingAge: detectedPostingAge,
@@ -412,8 +512,7 @@ score = Math.max(5, Math.min(score, 95));
         inactivity: { result: status !== 200, delay: 3200 },
       },
     });
-
-    } catch (err) {
+  } catch (err) {
     const code = err?.code || err?.cause?.code;
     const msg = String(err?.message || '').toLowerCase();
 
@@ -426,7 +525,7 @@ score = Math.max(5, Math.min(score, 95));
       msg.includes('enotfound') ||
       msg.includes('name not resolved');
 
-        if (isDnsFailure) {
+    if (isDnsFailure) {
       return res.status(400).json({
         error: `We couldn’t reach that domain (${parsedUrl.hostname}). It may be misspelled or offline. Please double-check the link.`,
         detected: {
@@ -437,9 +536,8 @@ score = Math.max(5, Math.min(score, 95));
       });
     }
 
-
     // Everything else: keep your existing fallback behavior (no regression)
-        res.json({
+    return res.json({
       score: 30,
       detected: {
         postingAge: null,
@@ -456,9 +554,7 @@ score = Math.max(5, Math.min(score, 95));
         inactivity: { result: false, delay: 3200 },
       },
     });
-
   }
-
 });
 
 /* ---------------- START ---------------- */
@@ -466,4 +562,3 @@ score = Math.max(5, Math.min(score, 95));
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
-
