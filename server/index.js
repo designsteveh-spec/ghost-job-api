@@ -225,11 +225,12 @@ function extractInlinePostedAge(html) {
   if (lower.includes('posted today') || lower.includes('posted: today')) return 'Posted today';
 
   // AWN: class="posted-days-text">Posted 2 days ago
-  let m = rawLower.match(/posted-days-text[^>]*>\s*posted\s*(\d+)\s*day[s]?\s*ago/);
+    let m = rawLower.match(/posted-days-text[^>]*>\s*posted[\s\S]{0,80}?(\d+)\s*day[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} days ago`;
 
-  m = rawLower.match(/posted-days-text[^>]*>\s*posted\s*(\d+)\s*hour[s]?\s*ago/);
+  m = rawLower.match(/posted-days-text[^>]*>\s*posted[\s\S]{0,80}?(\d+)\s*hour[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} hours ago`;
+
 
   // Allow punctuation/bullets between "posted" and the number (":", "•", "-", "—", "|")
   // Examples:
@@ -369,7 +370,11 @@ app.post('/api/analyze', async (req, res) => {
     const response = await fetch(url, {
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 'User-Agent': 'GhostJobChecker/1.0' },
+      headers: {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Accept-Language': 'en-US,en;q=0.9',
+},
     });
 
     clearTimeout(timeout);
@@ -382,7 +387,9 @@ if (DEBUG_POSTING_AGE) {
   console.log('[posting-age] host=', detectedEmployerSource);
   console.log('[posting-age] html_len=', html.length);
   console.log('[posting-age] has_jsonld=', /application\/ld\+json/i.test(html));
-  console.log('[posting-age] has_posted_word=', /posted/i.test(html));
+    console.log('[posting-age] has_posted_word=', /posted/i.test(html));
+  console.log('[posting-age] has_awn_posted_days_text=', /posted-days-text/i.test(html));
+
   console.log('[posting-age] sample_len=', Math.min(500, html.length));
 }
 
@@ -392,6 +399,9 @@ if (DEBUG_POSTING_AGE) {
     const detectedPostingAge = detectPostingAgeFromHtml(html) || null;
 
     const hostname = parsedUrl.hostname;
+	
+	const DEBUG_POSTING_AGE = true;
+
 
     /* ---------- BASE SCORE ---------- */
 
