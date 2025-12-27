@@ -149,6 +149,68 @@ function formatAgeFromDateString(dateStr) {
   return `Posted ${diffDays} days ago`;
 }
 
+// Metadata/time fallback (safe): <time datetime>, <meta content>, or simple json-ish keys
+function extractMetaOrTimeDatePosted(html) {
+  if (!html) return null;
+
+  // 1) <time datetime="..."> near "posted"
+  const timeRe = /<time[^>]*datetime=["']([^"']+)["'][^>]*>/gi;
+  let m;
+  while ((m = timeRe.exec(html)) !== null) {
+    const dt = (m[1] || '').trim();
+    if (!dt) continue;
+
+    const idx = m.index || 0;
+    const start = Math.max(0, idx - 250);
+    const end = Math.min(html.length, idx + 250);
+    const windowText = html.slice(start, end).toLowerCase();
+
+    if (windowText.includes('posted')) return dt;
+  }
+
+  // 2) meta publish-ish timestamps
+  const metaRe = /<meta[^>]+>/gi;
+  const keys = [
+    'article:published_time',
+    'article:modified_time',
+    'og:updated_time',
+    'pubdate',
+    'publishdate',
+    'publish_date',
+    'date',
+    'dc.date',
+    'dc.date.issued',
+    'sailthru.date',
+  ];
+
+  while ((m = metaRe.exec(html)) !== null) {
+    const tag = m[0];
+    const tagLower = tag.toLowerCase();
+
+    if (!tagLower.includes('content=')) continue;
+    const keyHit = keys.some((k) => tagLower.includes(k));
+    if (!keyHit) continue;
+
+    const contentMatch = tag.match(/content=["']([^"']+)["']/i);
+    const content = (contentMatch?.[1] || '').trim();
+    if (!content) continue;
+
+    if (tagLower.includes('publish') || tagLower.includes('posted') || tagLower.includes('modified')) {
+      return content;
+    }
+  }
+
+  // 3) json-ish fields (not necessarily valid JSON)
+  const lower = html.toLowerCase();
+  const jsonish = lower.match(
+    /(?:dateposted|posteddate|date_posted|publishdate|publishedat)["']?\s*[:=]\s*["']([^"']{6,40})["']/i
+  );
+  if (jsonish && jsonish[1]) return jsonish[1].trim();
+
+  return null;
+}
+
+
 // B) Inline age signal parsing (fallback)
 function extractInlinePostedAge(html) {
   const lower = (html || '')
@@ -161,23 +223,27 @@ function extractInlinePostedAge(html) {
   // conservative “today”
   if (lower.includes('posted today') || lower.includes('posted: today')) return 'Posted today';
 
-  // Posted X days ago
-  let m = lower.match(/posted[\s:·•\-–—]*?(\d+)\+?\s+day[s]?\s+ago/);
+  // Allow punctuation/bullets between "posted" and the number (":", "•", "-", "—", "|")
+  // Examples:
+  // - "Posted 2 days ago"
+  // - "Posted: 2 days ago"
+  // - "Posted • 2 days ago"
+  let m = lower.match(/posted\s*(?:[:\-–—•|]\s*)?(\d+)\+?\s*day[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} days ago`;
 
-  // Posted X hours ago
-  m = lower.match(/posted[\s:·•\-–—]*?(\d+)\+?\s+hour[s]?\s+ago/);
+  m = lower.match(/posted\s*(?:[:\-–—•|]\s*)?(\d+)\+?\s*hour[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} hours ago`;
 
-  // X days ago (without "posted" but often seen in UI)
-  m = lower.match(/(\d+)\+?\s+day[s]?\s+ago/);
+  // Some sites omit the word "posted" in the same node; keep fallback
+  m = lower.match(/(\d+)\+?\s*day[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} days ago`;
 
-  // X hours ago
-  m = lower.match(/(\d+)\+?\s+hour[s]?\s+ago/);
+  m = lower.match(/(\d+)\+?\s*hour[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} hours ago`;
 
   return null;
+}
+
 }
 
 // Master: JSON-LD first, then inline
@@ -186,11 +252,16 @@ function detectPostingAgeFromHtml(html) {
   const fromJsonLd = formatAgeFromDateString(jsonLdDate);
   if (fromJsonLd) return fromJsonLd;
 
+  const metaOrTimeDate = extractMetaOrTimeDatePosted(html);
+  const fromMetaOrTime = formatAgeFromDateString(metaOrTimeDate);
+  if (fromMetaOrTime) return fromMetaOrTime;
+
   const inline = extractInlinePostedAge(html);
   if (inline) return inline;
 
   return null;
 }
+
 
 /* ---------------- ANALYZE ---------------- */
 
