@@ -213,7 +213,8 @@ function extractMetaOrTimeDatePosted(html) {
 
 // B) Inline age signal parsing (fallback)
 function extractInlinePostedAge(html) {
-  const lower = (html || '')
+  const rawLower = (html || '').toLowerCase();
+  const lower = rawLower
     .replace(/<[^>]*>/g, ' ')
     .replace(/\s+/g, ' ')
     .toLowerCase();
@@ -223,12 +224,19 @@ function extractInlinePostedAge(html) {
   // conservative “today”
   if (lower.includes('posted today') || lower.includes('posted: today')) return 'Posted today';
 
+  // AWN: class="posted-days-text">Posted 2 days ago
+  let m = rawLower.match(/posted-days-text[^>]*>\s*posted\s*(\d+)\s*day[s]?\s*ago/);
+  if (m && m[1]) return `Posted ${m[1]} days ago`;
+
+  m = rawLower.match(/posted-days-text[^>]*>\s*posted\s*(\d+)\s*hour[s]?\s*ago/);
+  if (m && m[1]) return `Posted ${m[1]} hours ago`;
+
   // Allow punctuation/bullets between "posted" and the number (":", "•", "-", "—", "|")
   // Examples:
   // - "Posted 2 days ago"
   // - "Posted: 2 days ago"
   // - "Posted • 2 days ago"
-  let m = lower.match(/posted\s*(?:[:\-–—•|]\s*)?(\d+)\+?\s*day[s]?\s*ago/);
+  m = lower.match(/posted\s*(?:[:\-–—•|]\s*)?(\d+)\+?\s*day[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} days ago`;
 
   m = lower.match(/posted\s*(?:[:\-–—•|]\s*)?(\d+)\+?\s*hour[s]?\s*ago/);
@@ -241,8 +249,9 @@ function extractInlinePostedAge(html) {
   m = lower.match(/(\d+)\+?\s*hour[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} hours ago`;
 
-    return null;
+  return null;
 }
+
 
 // Master: JSON-LD first, then inline
 function detectPostingAgeFromHtml(html) {
