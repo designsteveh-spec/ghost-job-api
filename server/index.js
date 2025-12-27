@@ -241,13 +241,12 @@ function extractInlinePostedAge(html) {
   m = lower.match(/(\d+)\+?\s*hour[s]?\s*ago/);
   if (m && m[1]) return `Posted ${m[1]} hours ago`;
 
-  return null;
-}
-
+    return null;
 }
 
 // Master: JSON-LD first, then inline
 function detectPostingAgeFromHtml(html) {
+
   const jsonLdDate = extractJsonLdDatePosted(html);
   const fromJsonLd = formatAgeFromDateString(jsonLdDate);
   if (fromJsonLd) return fromJsonLd;
