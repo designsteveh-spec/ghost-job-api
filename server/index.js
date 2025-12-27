@@ -81,51 +81,47 @@ function extractJsonLdDatePosted(html) {
   const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let m;
 
-  const tryFindDateInNode = (node) => {
-    if (!node || typeof node !== 'object') return null;
+  const found = [];
 
-    // Direct
-    if (typeof node.datePosted === 'string' && node.datePosted.trim()) return node.datePosted.trim();
-    if (typeof node.dateCreated === 'string' && node.dateCreated.trim()) return node.dateCreated.trim();
+  const walk = (node) => {
+    if (!node) return;
 
-    // Sometimes wrapped in @graph
-    if (Array.isArray(node['@graph'])) {
-      for (const g of node['@graph']) {
-        const found = tryFindDateInNode(g);
-        if (found) return found;
-      }
-    }
-
-    // Sometimes an array of objects
     if (Array.isArray(node)) {
-      for (const item of node) {
-        const found = tryFindDateInNode(item);
-        if (found) return found;
-      }
+      node.forEach(walk);
+      return;
     }
 
-    return null;
+    if (typeof node === 'object') {
+      const t = node['@type'];
+      const isJobPosting =
+        (typeof t === 'string' && t.toLowerCase().includes('jobposting')) ||
+        (Array.isArray(t) && t.some((x) => String(x).toLowerCase().includes('jobposting')));
+
+      const dp =
+        (typeof node.datePosted === 'string' && node.datePosted.trim()) ? node.datePosted.trim() :
+        (typeof node.dateCreated === 'string' && node.dateCreated.trim()) ? node.dateCreated.trim() :
+        null;
+
+      if (dp) found.push({ isJobPosting, value: dp });
+
+      for (const k of Object.keys(node)) walk(node[k]);
+    }
   };
 
   while ((m = re.exec(html)) !== null) {
     const raw = (m[1] || '').trim();
     if (!raw) continue;
 
-    // Some sites include multiple JSON objects without being valid JSON; keep it conservative:
-    // - First try JSON.parse as-is
-    // - If it fails, skip (don’t risk breaking working links)
     try {
       const parsed = JSON.parse(raw);
-
-      // If it's JobPosting, great. If it's other, still try (some embed JobPosting nested)
-      const direct = tryFindDateInNode(parsed);
-      if (direct) return direct;
+      walk(parsed);
     } catch {
       // ignore parse errors safely
     }
   }
 
-  return null;
+  const preferred = found.find((x) => x.isJobPosting)?.value;
+  return preferred || found[0]?.value || null;
 }
 
 function formatAgeFromDateString(dateStr) {
@@ -155,20 +151,22 @@ function formatAgeFromDateString(dateStr) {
 
 // B) Inline age signal parsing (fallback)
 function extractInlinePostedAge(html) {
-  const lower = (html || '').toLowerCase();
+  const lower = (html || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 
   if (lower.includes('just posted')) return 'Just posted';
-  if (lower.includes('posted today') || lower.includes('today')) {
-    // keep conservative: only return if “posted” appears nearby
-    if (lower.includes('posted')) return 'Posted today';
-  }
+
+  // conservative “today”
+  if (lower.includes('posted today') || lower.includes('posted: today')) return 'Posted today';
 
   // Posted X days ago
-  let m = lower.match(/posted\s+(\d+)\+?\s+day[s]?\s+ago/);
+  let m = lower.match(/posted[\s:·•\-–—]*?(\d+)\+?\s+day[s]?\s+ago/);
   if (m && m[1]) return `Posted ${m[1]} days ago`;
 
   // Posted X hours ago
-  m = lower.match(/posted\s+(\d+)\+?\s+hour[s]?\s+ago/);
+  m = lower.match(/posted[\s:·•\-–—]*?(\d+)\+?\s+hour[s]?\s+ago/);
   if (m && m[1]) return `Posted ${m[1]} hours ago`;
 
   // X days ago (without "posted" but often seen in UI)
@@ -195,6 +193,7 @@ function detectPostingAgeFromHtml(html) {
 }
 
 /* ---------------- ANALYZE ---------------- */
+
 
 app.post('/api/analyze', async (req, res) => {
   const { url: rawUrl, jobDescription: rawJobDescription } = req.body;
@@ -298,6 +297,16 @@ app.post('/api/analyze', async (req, res) => {
 
     const status = response.status;
     const html = await response.text();
+
+const DEBUG_POSTING_AGE = false; // set true temporarily
+if (DEBUG_POSTING_AGE) {
+  console.log('[posting-age] host=', detectedEmployerSource);
+  console.log('[posting-age] html_len=', html.length);
+  console.log('[posting-age] has_jsonld=', /application\/ld\+json/i.test(html));
+  console.log('[posting-age] has_posted_word=', /posted/i.test(html));
+  console.log('[posting-age] sample_len=', Math.min(500, html.length));
+}
+
 
     // Posting age detection (JSON-LD datePosted first, then inline "Posted X days ago")
     // NOTE: This does NOT affect scoring unless you later choose to use it.
